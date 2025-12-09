@@ -56,12 +56,11 @@ class TokenTracker:
 
 
 llm_client = AzureChatOpenAI(
-    #TODO:
-    # temperature=0.0
-    # azure_deployment='gpt-4o'
-    # azure_endpoint=DIAL_URL
-    # api_key=SecretStr(API_KEY)
-    # api_version=""
+    temperature=0.0,
+    azure_deployment='gpt-4o',
+    azure_endpoint=DIAL_URL,
+    api_key=SecretStr(API_KEY),
+    api_version="2024-10-21"
 )
 
 token_tracker = TokenTracker()
@@ -79,16 +78,17 @@ def join_context(context: list[dict[str, Any]]) -> str:
 
 async def generate_response(system_prompt: str, user_message: str) -> str:
     print("Processing...")
-    #TODO:
-    # 1. Create messages array with:
-    #       - SystemMessage(content=system_prompt)
-    #       - HumanMessage(content=user_message)
-    # 2. Generate response (use `ainvoke`, don't forget to `await` the response)
-    # 3. Get usage: response.response_metadata.get('token_usage', {}).get("total_tokens", 0)
-    # 4. Add tokens to `token_tracker`
-    # 5. Print `response.content` and `total_tokens`
-    # 5. return `response.content`
-    raise NotImplementedError
+    
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_message)
+    ]
+    response = await llm_client.ainvoke(messages)
+    usage = response.response_metadata.get('token_usage', {}).get("total_tokens", 0)
+    token_tracker.add_tokens(usage)
+    print(response.content)
+    print(f"Total tokens used in this response: {usage}")
+    return response.content
 
 
 async def main():
@@ -99,25 +99,27 @@ async def main():
     if user_question:
         print("\n--- Searching user database ---")
 
-        #TODO:
-        # 1. Get all users (use UserClient)
-        # 2. Split all users on batches (100 users in 1 batch). We need it since LLMs have its limited context window
-        # 3. Prepare tasks for async run of response generation for users batches:
-        #       - create array tasks
-        #       - iterate through `user_batches` and call `generate_response` with these params:
-        #           - system_prompt=BATCH_SYSTEM_PROMPT
-        #           - user_message=USER_PROMPT.format(context=join_context(user_batch), query=user_question)
-        # 4. Gather tasks: `await asyncio.gather(*tasks)`
-        # 5. Filter results on 'NO_MATCHES_FOUND' (see instructions for BATCH_SYSTEM_PROMPT)
-        # 5. If results after filtration are present:
-        #       - combine filtered results `"\n\n".join(relevant_results)`
-        #       - call `await generate_response` with such params:
-        #           - system_prompt=FINAL_SYSTEM_PROMPT,
-        #           - user_message=f"SEARCH RESULTS:\n{combined_results}\n\nORIGINAL QUERY: {user_question}"
-        # 6. Otherwise prin the info that `No users found matching`
-        # 7. In the end print info about usage, you will be impressed of how many tokens you have used. (imagine if we have 10k or 100k users 😅)
-    raise NotImplementedError
+        user_client = UserClient()
+        all_users = await user_client.get_all_users()
+        user_batches = [all_users[i:i + 100] for i in range(0, len(all_users), 100)]
+        tasks = []
+        for user_batch in user_batches:
+            user_message = USER_PROMPT.format(context=join_context(user_batch), query=user_question)
+            tasks.append(generate_response(BATCH_SYSTEM_PROMPT, user_message))
+        batch_results = await asyncio.gather(*tasks)
+        relevant_results = [result for result in batch_results if result != "NO_MATCHES_FOUND"]
+        if relevant_results:
+            combined_results = "\n\n".join(relevant_results)
+            final_message = f"SEARCH RESULTS:\n{combined_results}\n\nORIGINAL QUERY: {user_question}"
+            await generate_response(FINAL_SYSTEM_PROMPT, final_message)
+        else:
+            print("No users found matching the criteria.")
 
+        usage_summary = token_tracker.get_summary()
+        print("\n--- Token Usage Summary ---")
+        print(f"Total tokens used: {usage_summary['total_tokens']}")
+        print(f"Number of batches processed: {usage_summary['batch_count']}")
+        print(f"Tokens used per batch: {usage_summary['batch_tokens']}")
 
 if __name__ == "__main__":
     asyncio.run(main())
